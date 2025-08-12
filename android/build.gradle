@@ -2,6 +2,7 @@ group 'com.phan_tech.ussd_advanced'
 version '1.0-SNAPSHOT'
 
 buildscript {
+    namespace 'com.phan_tech.ussd_advanced'
     ext.kotlin_version = '1.6.10'
     repositories {
         google()
