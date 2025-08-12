@@ -1,448 +1,246 @@
-package com.phan_tech.ussd_advanced
+/*
+ * Copyright (c) 2020. BoostTag E.I.R.L. Romell D.Z.
+ * All rights reserved
+ * porfile.romellfudi.com
+ */
+package com.phan_tech.ussd_advanced;
 
-import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.provider.Settings
-import android.telecom.TelecomManager
-import android.telephony.TelephonyManager
-import android.telephony.TelephonyManager.UssdResponseCallback
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityManager
-import androidx.annotation.NonNull
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.embedding.engine.plugins.activity.ActivityAware
-import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
-import io.flutter.plugin.common.BasicMessageChannel
-import io.flutter.plugin.common.MethodCall
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
-import io.flutter.plugin.common.StringCodec
-import java.util.concurrent.CompletableFuture
+import android.accessibilityservice.AccessibilityService;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
+
+import androidx.annotation.RequiresApi;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import io.flutter.Log;
 
 
-/** UssdAdvancedPlugin */
-class UssdAdvancedPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, BasicMessageChannel.MessageHandler<String?>  {
-  /// The MethodChannel that will the communication between Flutter and native Android
-  ///
-  /// This local reference serves to register the plugin with the Flutter Engine and unregister it
-  /// when the Flutter Engine is detached from the Activity
-  private lateinit var channel : MethodChannel
-  private var context: Context? = null
-  private var activity: Activity? = null
-  private var senderActivity: Activity? = null
-  private val ussdApi: USSDApi = USSDController
-  private var event: AccessibilityEvent? = null
+/**
+ * AccessibilityService object for ussd dialogs on Android mobile Telcoms
+ *
+ * @author Romell Dominguez
+ * @version 1.1.c 27/09/2018
+ * @since 1.0.a
+ */
+public class USSDServiceKT extends AccessibilityService {
 
+    private static AccessibilityEvent event;
 
-  private lateinit var basicMessageChannel: BasicMessageChannel<String>
-
-
-  override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-    channel = MethodChannel(flutterPluginBinding.binaryMessenger, "method.com.phan_tech/ussd_advanced")
-    channel.setMethodCallHandler(this)
-    this.context = flutterPluginBinding.applicationContext
-    basicMessageChannel  = BasicMessageChannel(
-      flutterPluginBinding.binaryMessenger,
-      "message.com.phan_tech/ussd_advanced", StringCodec.INSTANCE
-    )
-  }
-
-  override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-    activity = binding.activity
-  }
-
-  override fun onDetachedFromActivity() {
-    activity = null
-  }
-
-  override fun onDetachedFromActivityForConfigChanges() {
-    senderActivity = null
-  }
-
-  override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
-    senderActivity = binding.activity
-  }
-
-  private fun setListener(){
-    basicMessageChannel.setMessageHandler(this)
-  }
-
-  override fun onMessage(message: String?, reply: BasicMessageChannel.Reply<String?>) {
-    if(message != null){
-      USSDController.send2(message, event!!){
-        event = AccessibilityEvent.obtain(it)
-        try {
-          if(it.text.isNotEmpty()) {
-            reply.reply(it.text.first().toString())
-          }else{
-            reply.reply(null)
-          }
-        } catch (e: Exception){}
-
-      }
-    }
-  }
-
-  override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
-    var subscriptionId:Int = 1
-    var code:String? = ""
-
-    if(call.method == "sendUssd" ||call.method == "sendAdvancedUssd" ||call.method == "multisessionUssd"){
-      val subscriptionIdInteger = call.argument<Int>("subscriptionId")
-        ?: throw RequestParamsException(
-          "Incorrect parameter type: `subscriptionId` must be an int"
-        )
-      subscriptionId = subscriptionIdInteger
-      if (subscriptionId < -1 ) {
-        throw RequestParamsException(
-          "Incorrect parameter value: `subscriptionId` must be >= -1"
-        )
-      }
-      code = call.argument<String>("code")
-      if (code == null) {
-        throw RequestParamsException("Incorrect parameter type: `code` must be a String")
-      }
-      if (code.isEmpty()) {
-        throw RequestParamsException(
-          "Incorrect parameter value: `code` must not be an empty string"
-        )
-      }
-    }
-
-    when (call.method) {
-      "hasPermissions" -> {
-        result.success(hasPermissions())
-
-      }
-      "requestPermissions" -> {
-          requestPermissions()
-        result.success(null)
-
-      }
-      "sendUssd" -> {
-        result.success(defaultUssdService(code!!, subscriptionId))
-
-      }
-      "sendAdvancedUssd" -> {
-        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
-          val res = singleSessionUssd(code!!, subscriptionId)
-          if(res != null){
-
-            res.exceptionally { e: Throwable? ->
-              if (e is RequestExecutionException) {
-                result.error(
-                  RequestExecutionException.type, e.message, null
-                )
-              } else {
-                result.error(RequestExecutionException.type, e?.message, null)
-              }
-              null
-            }.thenAccept(result::success);
-
-          }else{
-            result.success(res);
-          }
-        }else{
-          result.success(defaultUssdService(code!!, subscriptionId))
+    /**
+     * Catch widget by Accessibility, when is showing at mobile display
+     *
+     * @param event AccessibilityEvent
+     */
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        USSDServiceKT.event = event;
+        USSDController ussd = USSDController.INSTANCE;
+//        Timber.d(String.format(
+//                "onAccessibilityEvent: [type] %s [class] %s [package] %s [time] %s [text] %s",
+//                event.getEventType(), event.getClassName(), event.getPackageName(),
+//                event.getEventTime(), event.getText()));
+        if (!ussd.isRunning()) {
+            return;
         }
-      }
-      "multisessionUssd" -> {
-
-        // check permissions
-        if(
-          !hasPermissions()
-        ){
-          requestPermissions()
-          result.success(null)
-
-
-        }else if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M){
-          multisessionUssd(code!!, subscriptionId, result)
-
-        }else{
-          result.success(defaultUssdService(code!!, subscriptionId))
+        String response = null;
+        if(!event.getText().isEmpty()) {
+            List<CharSequence> res = event.getText();
+            res.remove("SEND");
+            res.remove("CANCEL");
+            response = String.join("\n", res );
         }
-
-      }
-      "multisessionUssdCancel" ->{
-        multisessionUssdCancel()
-      }
-      else -> {
-        result.notImplemented()
-      }
-    }
-  }
-
-    private fun hasPermissions() : Boolean{
-        return !(
-                ContextCompat.checkSelfPermission(context!!, android.Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this.context!!, android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED ||
-                !isAccessibilityServiceEnabled(this.context!!)
-                )
-    }
-
-    private fun requestPermissions(){
-        if(!isAccessibilityServiceEnabled(this.context!!)) {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            this.context!!.startActivity(intent)
-
-        }
-
-        if (ContextCompat.checkSelfPermission(context!!, android.Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            if (!ActivityCompat.shouldShowRequestPermissionRationale(activity!!, android.Manifest.permission.CALL_PHONE)) {
-                ActivityCompat.requestPermissions(activity!!, arrayOf(android.Manifest.permission.CALL_PHONE), 2)
-            }
-        }
-
-        if (ContextCompat.checkSelfPermission(this.context!!, android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            if (!ActivityCompat.shouldShowRequestPermissionRationale(activity!!, android.Manifest.permission.READ_PHONE_STATE)) {
-                ActivityCompat.requestPermissions(activity!!, arrayOf(android.Manifest.permission.READ_PHONE_STATE), 2)
-            }
-        }
-
-    }
-
-  override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
-    channel.setMethodCallHandler(null)
-  }
-
-  private class RequestExecutionException internal constructor(override var message: String) :
-    Exception() {
-    companion object {
-      var type = "ussd_plugin_ussd_execution_failure"
-    }
-  }
-
-  private class RequestParamsException internal constructor(override var message: String) :
-    Exception() {
-    companion object {
-      var type = "ussd_plugin_incorrect__parameters"
-    }
-  }
-
-
-
-
-  // for android 8+
-  private fun singleSessionUssd(ussdCode:String, subscriptionId:Int) : CompletableFuture<String>?{
-    // use defaulft sim
-    val _useDefault: Boolean = subscriptionId == -1
-
-    if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
-      var res:CompletableFuture<String> = CompletableFuture<String>()
-      // check permissions
-      if (ContextCompat.checkSelfPermission(this.context!!, android.Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-        if (ActivityCompat.shouldShowRequestPermissionRationale(activity!!, android.Manifest.permission.CALL_PHONE)) {
-        } else {
-          ActivityCompat.requestPermissions(activity!!, arrayOf(android.Manifest.permission.CALL_PHONE), 2)
-        }
-      }
-
-      // get TelephonyManager
-      val tm = this.context!!.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-
-      val simManager: TelephonyManager = tm.createForSubscriptionId(subscriptionId)
-
-      // callback
-      val callback =
-        object : UssdResponseCallback() {
-          override fun onReceiveUssdResponse(
-            telephonyManager: TelephonyManager, request: String, response: CharSequence
-          ) {
-            res.complete(response.toString())
-          }
-
-          override fun onReceiveUssdResponseFailed(
-            telephonyManager: TelephonyManager, request: String, failureCode: Int
-          ) {
-            when (failureCode) {
-              TelephonyManager.USSD_ERROR_SERVICE_UNAVAIL -> {
-                res.completeExceptionally(RequestExecutionException("USSD_ERROR_SERVICE_UNAVAIL"))
-              }
-              TelephonyManager.USSD_RETURN_FAILURE -> {
-                res.completeExceptionally(RequestExecutionException("USSD_RETURN_FAILURE"))
-              }
-              else -> {
-                res.completeExceptionally(RequestExecutionException("unknown error"))
-              }
-            }
-          }
-        }
-
-      if(_useDefault){
-        tm.sendUssdRequest(
-          ussdCode,
-          callback,
-          Handler(Looper.getMainLooper())
-        )
-
-      }else{
-        simManager.sendUssdRequest(
-          ussdCode,
-          callback,
-          Handler(Looper.getMainLooper())
-        )
-      }
-
-
-      return res
-    }else{
-      // if sdk is less than 26
-      defaultUssdService(ussdCode, subscriptionId)
-      return  null
-    }
-
-  }
-
-  private fun multisessionUssd(ussdCode:String, subscriptionId:Int, @NonNull result: Result){
-    var slot = subscriptionId
-    if(subscriptionId == -1){
-      slot = 0
-    }
-
-    ussdApi.callUSSDInvoke(activity!!, ussdCode, slot, object : USSDController.CallbackInvoke {
-
-      override fun responseInvoke(ev: AccessibilityEvent) {
-        event = AccessibilityEvent.obtain(ev)
-        setListener()
-
-        try {
-          if(ev.text.isNotEmpty()) {
-            result.success(java.lang.String.join("\n", ev.text))
-//            result.success(ev.text.first().toString())
-          }else{
-            result.success(null)
-          }
-        }catch (e: Exception){}
-      }
-
-      override fun over(message: String) {
-        try {
-          basicMessageChannel.send(message)
-          result.success(message)
-          basicMessageChannel.setMessageHandler(null)
-        }catch (e: Exception){}
-
-      }
-    })
-  }
-
-  private fun multisessionUssdCancel(){
-    if(event != null){
-      ussdApi.cancel2(event!!);
-      basicMessageChannel.setMessageHandler(null)
-    }
-  }
-
-  private val simSlotName = arrayOf(
-    "extra_asus_dial_use_dualsim",
-    "com.android.phone.extra.slot",
-    "slot",
-    "simslot",
-    "sim_slot",
-    "subscription",
-    "Subscription",
-    "phone",
-    "com.android.phone.DialingMode",
-    "simSlot",
-    "slot_id",
-    "simId",
-    "simnum",
-    "phone_type",
-    "slotId",
-    "slotIdx"
-  )
-
-  // multiple for all
-  private fun defaultUssdService(ussdCode:String, subscriptionId:Int){
-    if (ContextCompat.checkSelfPermission(this.context!!, android.Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-      if (ActivityCompat.shouldShowRequestPermissionRationale(activity!!, android.Manifest.permission.CALL_PHONE)) {
-      } else {
-        ActivityCompat.requestPermissions(activity!!, arrayOf(android.Manifest.permission.CALL_PHONE), 2)
-      }
-    }
-    try {
-      // use defaulft sim
-      val _useDefault: Boolean = subscriptionId == -1
-
-      val sim:Int = subscriptionId -1
-      var number:String = ussdCode;
-      number = number.replace("#", "%23");
-      if (!number.startsWith("tel:")) {
-        number = String.format("tel:%s", number);
-      }
-      val intent =
-        Intent(if (isTelephonyEnabled()) Intent.ACTION_CALL else Intent.ACTION_VIEW)
-      intent.data = Uri.parse(number)
-
-      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-
-
-      if(!_useDefault){
-        intent.putExtra("com.android.phone.force.slot", true);
-        intent.putExtra("Cdma_Supp", true);
-
-        for (s in simSlotName) intent.putExtra(s, sim)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M){
-          if (ContextCompat.checkSelfPermission(this.context!!, android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            if (ActivityCompat.shouldShowRequestPermissionRationale(activity!!, android.Manifest.permission.READ_PHONE_STATE)) {
+        if (LoginView(event) && notInputText(event)) {
+            // first view or logView, do nothing, pass / FIRST MESSAGE
+            clickOnButton(event, 0);
+            ussd.stopRunning();
+            USSDController.callbackInvoke.over(response != null ? response : "");
+        } else if (problemView(event) || LoginView(event)) {
+            // deal down
+            clickOnButton(event, 1);
+            USSDController.callbackInvoke.over(response != null ? response : "");
+        } else if (isUSSDWidget(event)) {
+//            Timber.d("catch a USSD widget/Window");
+            if (notInputText(event)) {
+                // not more input panels / LAST MESSAGE
+                // sent 'OK' button
+//                Timber.d("No inputText found & closing USSD process");
+                clickOnButton(event, 0);
+                ussd.stopRunning();
+                USSDController.callbackInvoke.over(response != null ? response : "");
             } else {
-              ActivityCompat.requestPermissions(activity!!, arrayOf(android.Manifest.permission.READ_PHONE_STATE), 2)
+                // sent option 1
+                if (ussd.getSendType() == true)
+                    ussd.getCallbackMessage().invoke(event);
+                else USSDController.callbackInvoke.responseInvoke(event);
             }
-          }
-          val telecomManager = this.context!!.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-
-          val phoneAccountHandleList = telecomManager.callCapablePhoneAccounts
-          if (phoneAccountHandleList != null && phoneAccountHandleList.isNotEmpty())
-            intent.putExtra("android.telecom.extra.PHONE_ACCOUNT_HANDLE",
-              phoneAccountHandleList[sim]
-            );
         }
-      }
 
-
-      this.context!!.startActivity(intent)
-
-    } catch (e: Exception) {
-      throw e
     }
-  }
 
-  private fun isAccessibilityServiceEnabled(context: Context): Boolean{
-    var accessibilityEnabled: Boolean
-    accessibilityEnabled = false
-    val service = "com.phan_tech.ussd_advanced.USSDServiceKT"
-    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-    val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityEvent.TYPES_ALL_MASK)
-    for (enabledService in enabledServices) {
-      val id = enabledService.id
-      if (id.contains(service)) {
-        accessibilityEnabled = true
-        break
-      }
+    /**
+     * Send whatever you want via USSD
+     *
+     * @param text any string
+     */
+    public static void send(String text) {
+        setTextIntoField(event, text);
+        clickOnButton(event, 1);
     }
-    return accessibilityEnabled
+    public static void send2(String text, AccessibilityEvent ev) {
+        setTextIntoField(ev, text);
+        clickOnButton(ev, 1);
+    }
 
-  }
+    /**
+     * Dismiss dialog by using first button from USSD Dialog
+     */
+    public static void cancel() {
+        clickOnButton(event, 0);
+    }
+    public static void cancel2(AccessibilityEvent ev) {
+        clickOnButton(ev, 0);
+    }
 
-  private fun isTelephonyEnabled(): Boolean {
-    val tm = this.context!!.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-    return tm.phoneType != TelephonyManager.PHONE_TYPE_NONE
+    /**
+     * set text into input text at USSD widget
+     *
+     * @param event AccessibilityEvent
+     * @param data  Any String
+     */
+    private static void setTextIntoField(AccessibilityEvent event, String data) {
+        Bundle arguments = new Bundle();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, data);
+        }
+        for (AccessibilityNodeInfo leaf : getLeaves(event)) {
+            if (leaf.getClassName().equals("android.widget.EditText")
+                    && !leaf.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+                ClipboardManager clipboardManager = ((ClipboardManager)  USSDController
+                        .INSTANCE.getContext().getSystemService(Context.CLIPBOARD_SERVICE));
+                if (clipboardManager != null) {
+                    clipboardManager.setPrimaryClip(ClipData.newPlainText("text", data));
+                }
+                leaf.performAction(AccessibilityNodeInfo.ACTION_PASTE);
+            }
+        }
+    }
 
-  }
+    /**
+     * Method evaluate if USSD widget has input text
+     *
+     * @param event AccessibilityEvent
+     * @return boolean has or not input text
+     */
+    protected static boolean notInputText(AccessibilityEvent event) {
+        for (AccessibilityNodeInfo leaf : getLeaves(event))
+            if (leaf.getClassName().equals("android.widget.EditText")) return false;
+        return true;
+    }
+
+    /**
+     * The AccessibilityEvent is instance of USSD Widget class
+     *
+     * @param event AccessibilityEvent
+     * @return boolean AccessibilityEvent is USSD
+     */
+    private boolean isUSSDWidget(AccessibilityEvent event) {
+        return (event.getClassName().equals("amigo.app.AmigoAlertDialog")
+                || event.getClassName().equals("android.app.AlertDialog")
+                || event.getClassName().equals("com.android.phone.oppo.settings.LocalAlertDialog")
+                || event.getClassName().equals("com.zte.mifavor.widget.AlertDialog")
+                || event.getClassName().equals("color.support.v7.app.AlertDialog"));
+    }
+
+    /**
+     * The View has a login message into USSD Widget
+     *
+     * @param event AccessibilityEvent
+     * @return boolean USSD Widget has login message
+     */
+    private boolean LoginView(AccessibilityEvent event) {
+        return isUSSDWidget(event)
+                && USSDController.INSTANCE.getMap().get(USSDController.KEY_LOGIN)
+                .contains(event.getText().get(0).toString());
+    }
+
+    /**
+     * The View has a problem message into USSD Widget
+     *
+     * @param event AccessibilityEvent
+     * @return boolean USSD Widget has problem message
+     */
+    protected boolean problemView(AccessibilityEvent event) {
+        return isUSSDWidget(event)
+                && USSDController.INSTANCE.getMap().get(USSDController.KEY_ERROR)
+                .contains(event.getText().get(0).toString());
+    }
+
+    /**
+     * click a button using the index
+     *
+     * @param event AccessibilityEvent
+     * @param index button's index
+     */
+    protected static void clickOnButton(AccessibilityEvent event, int index) {
+    List<AccessibilityNodeInfo> leaves = getLeaves(event);
+
+    for (AccessibilityNodeInfo leaf : leaves) {
+        CharSequence text = leaf.getText();
+
+        if (text != null && text.toString().trim().equalsIgnoreCase("send")) {
+            // Try clicking the node itself
+            if (leaf.isClickable()) {
+                leaf.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+            // Fallback: try its parent
+            else if (leaf.getParent() != null && leaf.getParent().isClickable()) {
+                leaf.getParent().performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+            break; // stop after first match
+                }
+            }
+        }
 
 
+    private static List<AccessibilityNodeInfo> getLeaves(AccessibilityEvent event) {
+        List<AccessibilityNodeInfo> leaves = new ArrayList<>();
+        if (event != null && event.getSource() != null) {
+            getLeaves(leaves, event.getSource());
+        }
+        return leaves;
+    }
 
+    private static void getLeaves(List<AccessibilityNodeInfo> leaves, AccessibilityNodeInfo node) {
+        if (node.getChildCount() == 0) {
+            leaves.add(node);
+            return;
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            getLeaves(leaves, node.getChild(i));
+        }
+    }
 
+    /**
+     * Active when SO interrupt the application
+     */
+    @Override
+    public void onInterrupt() {
+//        Timber.d( "onInterrupt");
+    }
+
+    /**
+     * Configure accessibility server from Android Operative System
+     */
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+//        Timber.d("onServiceConnected");
+    }
 }
